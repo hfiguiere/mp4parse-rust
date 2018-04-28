@@ -273,6 +273,14 @@ pub struct Mp4parseTrackVideoSampleInfo {
     pub protected_data: Mp4parseSinfInfo,
 }
 
+#[cfg(feature = "craw")]
+#[repr(C)]
+#[derive(Default, Debug)]
+pub struct Mp4parseTrackRawInfo {
+    pub image_width: u16,
+    pub image_height: u16,
+}
+
 #[repr(C)]
 #[derive(Debug)]
 pub struct Mp4parseTrackVideoInfo {
@@ -881,6 +889,48 @@ fn get_track_audio_info(
     }
 
     Ok(())
+}
+
+/// File the supplied `Mp4parseTrackRawInfo` with metadata for `track`.
+#[cfg(feature = "craw")]
+#[no_mangle]
+pub unsafe extern fn mp4parse_get_track_raw_info(parser: *mut Mp4parseParser, track_index: u32, info: *mut Mp4parseTrackRawInfo) -> Mp4parseStatus {
+    if parser.is_null() || info.is_null() {
+        return Mp4parseStatus::BadArg;
+    }
+
+    // Initialize fields to default values to ensure all fields are always valid.
+    *info = Default::default();
+
+    let context = (*parser).context_mut();
+
+    if track_index as usize >= context.tracks.len() {
+        return Mp4parseStatus::BadArg;
+    }
+
+    let track = &context.tracks[track_index as usize];
+
+    match track.track_type {
+        TrackType::Video => {}
+        _ => return Mp4parseStatus::Invalid,
+    };
+
+    let video = match track.stsd {
+        // We assume there is only one.
+        Some(ref data) => &data.descriptions[0],
+        None => return Mp4parseStatus::Invalid,
+    };
+
+    let raw = match *video {
+        SampleEntry::CanonCRAW(ref x) => x,
+        _ => return Mp4parseStatus::Invalid,
+    };
+
+    (*info).image_width = raw.width;
+    (*info).image_height = raw.height;
+
+    Mp4parseStatus::Ok
+
 }
 
 /// Fill the supplied `Mp4parseTrackVideoInfo` with metadata for `track`.
