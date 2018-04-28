@@ -100,6 +100,7 @@ pub enum Mp4parseCodec {
     Ac3,
     Ec3,
     Alac,
+    Craw,   // Canon RAW
 }
 
 impl Default for Mp4parseCodec {

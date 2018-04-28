@@ -285,6 +285,7 @@ struct SampleDescriptionBox {
 pub enum SampleEntry {
     Audio(AudioSampleEntry),
     Video(VideoSampleEntry),
+    CanonCRAW(CanonCRAWEntry),
     Unknown,
 }
 
@@ -334,6 +335,13 @@ pub struct VideoSampleEntry {
     pub height: u16,
     pub codec_specific: VideoCodecSpecific,
     pub protection_info: Vec<ProtectionSchemeInfoBox>,
+}
+
+#[derive(Debug, Clone)]
+pub struct CanonCRAWEntry {
+    data_reference_index: u16,
+    pub width: u16,
+    pub height: u16,
 }
 
 /// Represent a Video Partition Codec Configuration 'vpcC' box (aka vp9).
@@ -463,6 +471,7 @@ pub enum CodecType {
     EncryptedAudio,
     LPCM,   // QT
     ALAC,
+    CRAW,   // Canon CRAW
 }
 
 impl Default for CodecType {
@@ -1761,6 +1770,7 @@ fn read_video_sample_entry<T: Read>(src: &mut BMFFBox<T>) -> Result<(CodecType, 
         BoxType::MP4VideoSampleEntry => CodecType::MP4V,
         BoxType::VP8SampleEntry => CodecType::VP8,
         BoxType::VP9SampleEntry => CodecType::VP9,
+        BoxType::CanonCRAWEntry => CodecType::CRAW,
         BoxType::ProtectedVisualSampleEntry => CodecType::EncryptedVideo,
         _ => {
             debug!("Unsupported video codec, box {:?} found", name);
@@ -1775,9 +1785,22 @@ fn read_video_sample_entry<T: Read>(src: &mut BMFFBox<T>) -> Result<(CodecType, 
 
     // Skip uninteresting fields.
     skip(src, 16)?;
-
     let width = be_u16(src)?;
     let height = be_u16(src)?;
+
+    #[cfg(feature = "craw")]
+    {
+        if codec_type == CodecType::CRAW {
+            skip_box_remain(src)?;
+            check_parser_state!(src.content);
+
+            return Ok((codec_type, SampleEntry::CanonCRAW(CanonCRAWEntry {
+                data_reference_index: data_reference_index,
+                width: width,
+                height: height,
+            })));
+        }
+    }
 
     // Skip uninteresting fields.
     skip(src, 50)?;
