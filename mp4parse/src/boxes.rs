@@ -201,4 +201,12 @@ box_database!(
     SortArtistEntry                   0x736f_6172, // "soar"
     SortAlbumArtistEntry              0x736f_6161, // "soaa"
     SortComposerEntry                 0x736f_636f, // "soco"
+
+    QTJPEGAtom                        0x4a50_4547, // "JPEG"
+
+    // All the Canon CR3 stuff.
+    CanonCRAWEntry                    0x4352_4157, // "CRAW"
+    CanonMetadataEntry                0x4354_4d44, // "CTMD"
+    CanonCMP1                         0x434d_5031, // "CMP1"
+    CanonPreview                      0x5052_5657, // "PRVW"
 );
