@@ -27,6 +27,9 @@ use boxes::{BoxType, FourCC};
 
 mod fallible;
 
+#[cfg(feature = "craw")]
+mod craw;
+
 // Unit tests.
 #[cfg(test)]
 mod tests;
@@ -86,7 +89,7 @@ impl_to_usize_from!(u16);
 impl_to_usize_from!(u32);
 
 /// Indicate the current offset (i.e., bytes already read) in a reader
-trait Offset {
+pub trait Offset {
     fn offset(&self) -> u64;
 }
 
@@ -364,7 +367,8 @@ pub struct SampleDescriptionBox {
 pub enum SampleEntry {
     Audio(AudioSampleEntry),
     Video(VideoSampleEntry),
-    CanonCRAW(CanonCRAWEntry),
+    #[cfg(feature = "craw")]
+    CanonCRAW(craw::CanonCRAWEntry),
     Unknown,
 }
 
@@ -418,15 +422,6 @@ pub struct VideoSampleEntry {
     pub height: u16,
     pub codec_specific: VideoCodecSpecific,
     pub protection_info: TryVec<ProtectionSchemeInfoBox>,
-}
-
-#[cfg(feature = "craw")]
-#[derive(Debug, Clone)]
-pub struct CanonCRAWEntry {
-    data_reference_index: u16,
-    pub width: u16,
-    pub height: u16,
-    pub is_jpeg: bool,
 }
 
 /// Represent a Video Partition Codec Configuration 'vpcC' box (aka vp9). The meaning of each
@@ -736,6 +731,9 @@ pub struct MediaContext {
     pub mvex: Option<MovieExtendsBox>,
     pub psshs: TryVec<ProtectionSystemSpecificHeaderBox>,
     pub userdata: Option<Result<UserdataBox>>,
+
+    #[cfg(feature = "craw")]
+    pub craw: Option<craw::CrawHeader>,
 }
 
 impl MediaContext {
@@ -953,7 +951,7 @@ pub enum CodecType {
     EncryptedAudio,
     LPCM, // QT
     ALAC,
-    CRAW,   // Canon CRAW
+    CRAW, // Canon CRAW
 }
 
 impl Default for CodecType {
@@ -1019,7 +1017,7 @@ impl Track {
     }
 }
 
-struct BMFFBox<'a, T: 'a> {
+pub struct BMFFBox<'a, T: 'a> {
     head: BoxHeader,
     content: Take<&'a mut T>,
 }
@@ -1679,6 +1677,27 @@ fn read_moov<T: Read>(f: &mut BMFFBox<T>, context: &mut MediaContext) -> Result<
     let mut iter = f.box_iter();
     while let Some(mut b) = iter.next_box()? {
         match b.head.name {
+            BoxType::UuidBox => {
+                debug!("{:?}", b.head);
+                let mut box_known = false;
+                #[cfg(feature = "craw")]
+                {
+                    if context.brand == FourCC::from(*b"crx ")
+                        && b.head.uuid == Some(craw::HEADER_UUID)
+                    {
+                        let crawheader = craw::parse_craw_header(&mut b)?;
+                        context.craw = Some(crawheader);
+                        box_known = true;
+                    }
+                }
+                if !box_known {
+                    debug!(
+                        "Unknown UUID box {:?} (skipping)",
+                        b.head.uuid.as_ref().unwrap()
+                    );
+                    skip_box_content(&mut b)?;
+                }
+            }
             BoxType::MovieHeaderBox => {
                 let (mvhd, timescale) = parse_mvhd(&mut b)?;
                 context.timescale = timescale;
@@ -2861,41 +2880,6 @@ fn read_hdlr<T: Read>(src: &mut BMFFBox<T>) -> Result<HandlerBox> {
     Ok(HandlerBox { handler_type })
 }
 
-#[cfg(feature = "craw")]
-/// Parse the CRAW entry inside the video sample entry.
-fn read_craw_entry<T: Read>(src: &mut BMFFBox<T>,
-                            width: u16, height: u16,
-                            data_reference_index: u16) -> Result<SampleEntry> {
-    skip(src, 54)?;
-    let mut is_jpeg = false;
-    {
-        let mut iter = src.box_iter();
-        while let Some(mut b) = iter.next_box()? {
-            debug!("Box size {}", b.head.size);
-            match b.head.name {
-                BoxType::QTJPEGAtom => {
-                    is_jpeg = true;
-                }
-                BoxType::CanonCMP1 => {
-                }
-                _ => {
-                    debug!("Unsupported box '{:?}' in CRAW", b.head.name);
-                }
-            }
-            skip_box_remain(&mut b)?;
-        }
-    }
-    skip_box_remain(src)?;
-    check_parser_state!(src.content);
-
-    Ok(SampleEntry::CanonCRAW(CanonCRAWEntry {
-        data_reference_index: data_reference_index,
-        width: width,
-        height: height,
-        is_jpeg: is_jpeg,
-    }))
-}
-
 /// Parse an video description inside an stsd box.
 fn read_video_sample_entry<T: Read>(src: &mut BMFFBox<T>, brand: &FourCC) -> Result<SampleEntry> {
     let name = src.get_header().name;
@@ -2933,7 +2917,7 @@ fn read_video_sample_entry<T: Read>(src: &mut BMFFBox<T>, brand: &FourCC) -> Res
     #[cfg(feature = "craw")]
     {
         if codec_type == CodecType::CRAW {
-            return read_craw_entry(src, width, height, data_reference_index);
+            return craw::read_craw_entry(src, width, height, data_reference_index);
         }
     }
 
@@ -3177,7 +3161,11 @@ fn read_audio_sample_entry<T: Read>(src: &mut BMFFBox<T>) -> Result<SampleEntry>
 }
 
 /// Parse a stsd box.
-fn read_stsd<T: Read>(src: &mut BMFFBox<T>, track: &mut Track, brand: & FourCC) -> Result<SampleDescriptionBox> {
+fn read_stsd<T: Read>(
+    src: &mut BMFFBox<T>,
+    track: &mut Track,
+    brand: &FourCC,
+) -> Result<SampleDescriptionBox> {
     let (_, _) = read_fullbox_extra(src)?;
 
     let description_count = be_u32(src)?;

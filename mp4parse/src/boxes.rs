@@ -211,4 +211,11 @@ box_database!(
     CanonCMP1                         0x434d_5031, // "CMP1"
     CanonCDI1                         0x4344_4931, // "CDI1"
     CanonPreview                      0x5052_5657, // "PRVW"
+    CanonCompressorVersion            0x434e_4356, // "CNCV"
+    CanonThumbnail                    0x5448_4d42, // "THMB"
+    CanonTableOffset                  0x4354_424f, // "CTBO"
+    CanonMeta1                        0x434d_5431, // "CMT1"
+    CanonMeta2                        0x434d_5432, // "CMT2"
+    CanonMeta3                        0x434d_5433, // "CMT3"
+    CanonMeta4                        0x434d_5434, // "CMT4"
 );
