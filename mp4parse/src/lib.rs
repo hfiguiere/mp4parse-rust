@@ -31,6 +31,9 @@ mod macros;
 mod boxes;
 use boxes::{BoxType, FourCC};
 
+#[cfg(feature = "craw")]
+mod craw;
+
 // Unit tests.
 #[cfg(test)]
 mod tests;
@@ -285,7 +288,8 @@ struct SampleDescriptionBox {
 pub enum SampleEntry {
     Audio(AudioSampleEntry),
     Video(VideoSampleEntry),
-    CanonCRAW(CanonCRAWEntry),
+    #[cfg(feature = "craw")]
+    CanonCRAW(craw::CanonCRAWEntry),
     Unknown,
 }
 
@@ -335,14 +339,6 @@ pub struct VideoSampleEntry {
     pub height: u16,
     pub codec_specific: VideoCodecSpecific,
     pub protection_info: Vec<ProtectionSchemeInfoBox>,
-}
-
-#[derive(Debug, Clone)]
-pub struct CanonCRAWEntry {
-    data_reference_index: u16,
-    pub width: u16,
-    pub height: u16,
-    pub is_jpeg: bool,
 }
 
 /// Represent a Video Partition Codec Configuration 'vpcC' box (aka vp9).
@@ -436,7 +432,9 @@ pub struct MediaContext {
     /// Tracks found in the file.
     pub tracks: Vec<Track>,
     pub mvex: Option<MovieExtendsBox>,
-    pub psshs: Vec<ProtectionSystemSpecificHeaderBox>
+    pub psshs: Vec<ProtectionSystemSpecificHeaderBox>,
+    #[cfg(feature = "craw")]
+    pub craw: Option<craw::CrawHeader>,
 }
 
 impl MediaContext {
@@ -532,7 +530,7 @@ impl Track {
     }
 }
 
-struct BMFFBox<'a, T: 'a + Read> {
+pub struct BMFFBox<'a, T: 'a + Read> {
     head: BoxHeader,
     content: Take<&'a mut T>,
 }
@@ -746,6 +744,24 @@ fn read_moov<T: Read>(f: &mut BMFFBox<T>, context: &mut MediaContext) -> Result<
     let mut iter = f.box_iter();
     while let Some(mut b) = iter.next_box()? {
         match b.head.name {
+            BoxType::UuidBox => {
+                debug!("{:?}", b.head);
+                let mut box_known = false;
+                #[cfg(feature = "craw")]
+                {
+                    if context.brand == FourCC::from("crx ") &&
+                        b.head.uuid == Some(craw::HEADER_UUID) {
+                            let crawheader = craw::parse_craw_header(&mut b)?;
+                            context.craw = Some(crawheader);
+                            box_known = true;
+                        }
+                }
+                if !box_known {
+                    debug!("Unknown UUID box {:?} (skipping)",
+                           b.head.uuid.as_ref().unwrap());
+                    skip_box_content(&mut b)?;
+                }
+            }
             BoxType::MovieHeaderBox => {
                 let (mvhd, timescale) = parse_mvhd(&mut b)?;
                 context.timescale = timescale;
@@ -1765,41 +1781,6 @@ fn read_hdlr<T: Read>(src: &mut BMFFBox<T>) -> Result<HandlerBox> {
     })
 }
 
-#[cfg(feature = "craw")]
-/// Parse the CRAW entry inside the video sample entry.
-fn read_craw_entry<T: Read>(src: &mut BMFFBox<T>, codec_type: CodecType,
-                            width: u16, height: u16,
-                            data_reference_index: u16) -> Result<(CodecType, SampleEntry)> {
-    skip(src, 54)?;
-    let mut is_jpeg = false;
-    {
-        let mut iter = src.box_iter();
-        while let Some(mut b) = iter.next_box()? {
-            debug!("Box size {}", b.head.size);
-            match b.head.name {
-                BoxType::QTJPEGAtom => {
-                    is_jpeg = true;
-                }
-                BoxType::CanonCMP1 => {
-                }
-                _ => {
-                    debug!("Unsupported box '{:?}' in CRAW", b.head.name);
-                }
-            }
-            skip_box_remain(&mut b)?;
-        }
-    }
-    skip_box_remain(src)?;
-    check_parser_state!(src.content);
-
-    Ok((codec_type, SampleEntry::CanonCRAW(CanonCRAWEntry {
-        data_reference_index: data_reference_index,
-        width: width,
-        height: height,
-        is_jpeg: is_jpeg,
-    })))
-}
-
 /// Parse an video description inside an stsd box.
 fn read_video_sample_entry<T: Read>(src: &mut BMFFBox<T>, brand: &FourCC) -> Result<(CodecType, SampleEntry)> {
     let name = src.get_header().name;
@@ -1836,7 +1817,7 @@ fn read_video_sample_entry<T: Read>(src: &mut BMFFBox<T>, brand: &FourCC) -> Res
     #[cfg(feature = "craw")]
     {
         if codec_type == CodecType::CRAW {
-            return read_craw_entry(src, codec_type, width, height, data_reference_index);
+            return craw::read_craw_entry(src, codec_type, width, height, data_reference_index);
         }
     }
 

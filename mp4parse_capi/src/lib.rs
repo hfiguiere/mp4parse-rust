@@ -215,6 +215,20 @@ pub struct Mp4parseFragmentInfo {
     // info in trex box.
 }
 
+#[cfg(feature = "craw")]
+#[repr(C)]
+#[derive(Default)]
+pub struct Mp4parseCrawHeader {
+    pub cncv: Mp4parseByteData,
+    pub thumb_w: u16,
+    pub thumb_h: u16,
+    pub thumbnail: Mp4parseByteData,
+    pub meta1: Mp4parseByteData,
+    pub meta2: Mp4parseByteData,
+    pub meta3: Mp4parseByteData,
+    pub meta4: Mp4parseByteData,
+}
+
 pub struct Mp4parseParser {
     context: MediaContext,
     io: Mp4parseIo,
@@ -447,6 +461,7 @@ pub unsafe extern fn mp4parse_get_track_info(parser: *mut Mp4parseParser, track_
             VideoCodecSpecific::ESDSConfig(_) => // MP4V (14496-2) video is unsupported.
                 Mp4parseCodec::Unknown,
         },
+        #[cfg(feature = "craw")]
         Some(SampleEntry::CanonCRAW(_)) =>
             Mp4parseCodec::Craw,
         _ => Mp4parseCodec::Unknown,
@@ -1171,6 +1186,69 @@ pub unsafe extern fn mp4parse_get_pssh_info(parser: *mut Mp4parseParser, info: *
     }
 
     info.data.set_data(pssh_data);
+
+    Mp4parseStatus::Ok
+}
+
+#[cfg(feature = "craw")]
+#[no_mangle]
+pub unsafe extern fn mp4parse_get_craw_header(parser: *mut Mp4parseParser, header: *mut Mp4parseCrawHeader) -> Mp4parseStatus {
+    if parser.is_null() || header.is_null() || (*parser).poisoned() {
+        return Mp4parseStatus::BadArg;
+    }
+
+    // Initialize fields to default values to ensure all fields are always valid.
+    *header = Default::default();
+
+    let context = (*parser).context_mut();
+    let header: &mut Mp4parseCrawHeader = &mut *header;
+
+    if context.craw.is_none() {
+        return Mp4parseStatus::Invalid;
+    }
+
+    let craw = context.craw.as_ref().unwrap();
+    header.cncv.set_data(&craw.cncv);
+    header.thumb_w = craw.thumbnail.width;
+    header.thumb_h = craw.thumbnail.height;
+    header.thumbnail.set_data(&craw.thumbnail.data);
+    if let Some(ref meta) = craw.meta1 {
+        header.meta1.set_data(meta);
+    }
+    if let Some(ref meta) = craw.meta2 {
+        header.meta2.set_data(meta);
+    }
+    if let Some(ref meta) = craw.meta3 {
+        header.meta3.set_data(meta);
+    }
+    if let Some(ref meta) = craw.meta4 {
+        header.meta4.set_data(meta);
+    }
+
+    Mp4parseStatus::Ok
+}
+
+#[cfg(feature = "craw")]
+#[no_mangle]
+pub unsafe extern fn mp4parse_get_craw_table_entry(parser: *mut Mp4parseParser, idx: usize, offset: *mut u64, size: *mut u64) -> Mp4parseStatus {
+    if parser.is_null() || offset.is_null() || size.is_null()
+        || (*parser).poisoned() {
+            return Mp4parseStatus::BadArg;
+    }
+    *offset = 0;
+    *size = 0;
+    let context = (*parser).context_mut();
+    if context.craw.is_none() {
+        return Mp4parseStatus::Invalid;
+    }
+
+    let craw = context.craw.as_ref().unwrap();
+    if craw.offsets.len() <= idx {
+        return Mp4parseStatus::Invalid;
+    }
+    let entry = craw.offsets[idx];
+    *offset = entry.0;
+    *size = entry.1;
 
     Mp4parseStatus::Ok
 }
