@@ -203,10 +203,12 @@ box_database!(
     SortComposerEntry                 0x736f_636f, // "soco"
 
     QTJPEGAtom                        0x4a50_4547, // "JPEG"
+    FreeBox                           0x6672_6565, // "free"
 
     // All the Canon CR3 stuff.
     CanonCRAWEntry                    0x4352_4157, // "CRAW"
     CanonMetadataEntry                0x4354_4d44, // "CTMD"
     CanonCMP1                         0x434d_5031, // "CMP1"
+    CanonCDI1                         0x4344_4931, // "CDI1"
     CanonPreview                      0x5052_5657, // "PRVW"
 );
