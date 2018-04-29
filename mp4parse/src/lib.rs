@@ -342,6 +342,7 @@ pub struct CanonCRAWEntry {
     data_reference_index: u16,
     pub width: u16,
     pub height: u16,
+    pub is_jpeg: bool,
 }
 
 /// Represent a Video Partition Codec Configuration 'vpcC' box (aka vp9).
@@ -430,6 +431,7 @@ pub struct ProtectionSchemeInfoBox {
 /// Internal data structures.
 #[derive(Debug, Default)]
 pub struct MediaContext {
+    pub brand: FourCC,
     pub timescale: Option<MediaTimeScale>,
     /// Tracks found in the file.
     pub tracks: Vec<Track>,
@@ -703,6 +705,7 @@ pub fn read_mp4<T: Read>(f: &mut T, context: &mut MediaContext) -> Result<()> {
                 let ftyp = read_ftyp(&mut b)?;
                 found_ftyp = true;
                 debug!("{:?}", ftyp);
+                context.brand = ftyp.major_brand;
             }
             BoxType::MovieBox => {
                 read_moov(&mut b, context)?;
@@ -750,7 +753,7 @@ fn read_moov<T: Read>(f: &mut BMFFBox<T>, context: &mut MediaContext) -> Result<
             }
             BoxType::TrackBox => {
                 let mut track = Track::new(context.tracks.len());
-                read_trak(&mut b, &mut track)?;
+                read_trak(&mut b, &mut track, &context.brand)?;
                 vec_push(&mut context.tracks, track)?;
             }
             BoxType::MovieExtendsBox => {
@@ -835,7 +838,7 @@ fn read_mehd<T: Read>(src: &mut BMFFBox<T>) -> Result<MediaScaledTime> {
     Ok(MediaScaledTime(fragment_duration))
 }
 
-fn read_trak<T: Read>(f: &mut BMFFBox<T>, track: &mut Track) -> Result<()> {
+fn read_trak<T: Read>(f: &mut BMFFBox<T>, track: &mut Track, brand: &FourCC) -> Result<()> {
     let mut iter = f.box_iter();
     while let Some(mut b) = iter.next_box()? {
         match b.head.name {
@@ -846,7 +849,7 @@ fn read_trak<T: Read>(f: &mut BMFFBox<T>, track: &mut Track) -> Result<()> {
                 debug!("{:?}", tkhd);
             }
             BoxType::EditBox => read_edts(&mut b, track)?,
-            BoxType::MediaBox => read_mdia(&mut b, track)?,
+            BoxType::MediaBox => read_mdia(&mut b, track, brand)?,
             _ => skip_box_content(&mut b)?,
         };
         check_parser_state!(b.content);
@@ -906,7 +909,7 @@ fn parse_mdhd<T: Read>(f: &mut BMFFBox<T>, track: &mut Track) -> Result<(MediaHe
     Ok((mdhd, duration, timescale))
 }
 
-fn read_mdia<T: Read>(f: &mut BMFFBox<T>, track: &mut Track) -> Result<()> {
+fn read_mdia<T: Read>(f: &mut BMFFBox<T>, track: &mut Track, brand: &FourCC) -> Result<()> {
     let mut iter = f.box_iter();
     while let Some(mut b) = iter.next_box()? {
         match b.head.name {
@@ -927,7 +930,7 @@ fn read_mdia<T: Read>(f: &mut BMFFBox<T>, track: &mut Track) -> Result<()> {
                 }
                 debug!("{:?}", hdlr);
             }
-            BoxType::MediaInformationBox => read_minf(&mut b, track)?,
+            BoxType::MediaInformationBox => read_minf(&mut b, track, brand)?,
             _ => skip_box_content(&mut b)?,
         };
         check_parser_state!(b.content);
@@ -935,11 +938,11 @@ fn read_mdia<T: Read>(f: &mut BMFFBox<T>, track: &mut Track) -> Result<()> {
     Ok(())
 }
 
-fn read_minf<T: Read>(f: &mut BMFFBox<T>, track: &mut Track) -> Result<()> {
+fn read_minf<T: Read>(f: &mut BMFFBox<T>, track: &mut Track, brand: &FourCC) -> Result<()> {
     let mut iter = f.box_iter();
     while let Some(mut b) = iter.next_box()? {
         match b.head.name {
-            BoxType::SampleTableBox => read_stbl(&mut b, track)?,
+            BoxType::SampleTableBox => read_stbl(&mut b, track, brand)?,
             _ => skip_box_content(&mut b)?,
         };
         check_parser_state!(b.content);
@@ -947,12 +950,12 @@ fn read_minf<T: Read>(f: &mut BMFFBox<T>, track: &mut Track) -> Result<()> {
     Ok(())
 }
 
-fn read_stbl<T: Read>(f: &mut BMFFBox<T>, track: &mut Track) -> Result<()> {
+fn read_stbl<T: Read>(f: &mut BMFFBox<T>, track: &mut Track, brand: &FourCC) -> Result<()> {
     let mut iter = f.box_iter();
     while let Some(mut b) = iter.next_box()? {
         match b.head.name {
             BoxType::SampleDescriptionBox => {
-                let stsd = read_stsd(&mut b, track)?;
+                let stsd = read_stsd(&mut b, track, brand)?;
                 debug!("{:?}", stsd);
             }
             BoxType::TimeToSampleBox => {
@@ -1762,15 +1765,57 @@ fn read_hdlr<T: Read>(src: &mut BMFFBox<T>) -> Result<HandlerBox> {
     })
 }
 
+#[cfg(feature = "craw")]
+/// Parse the CRAW entry inside the video sample entry.
+fn read_craw_entry<T: Read>(src: &mut BMFFBox<T>, codec_type: CodecType,
+                            width: u16, height: u16,
+                            data_reference_index: u16) -> Result<(CodecType, SampleEntry)> {
+    skip(src, 54)?;
+    let mut is_jpeg = false;
+    {
+        let mut iter = src.box_iter();
+        while let Some(mut b) = iter.next_box()? {
+            debug!("Box size {}", b.head.size);
+            match b.head.name {
+                BoxType::QTJPEGAtom => {
+                    is_jpeg = true;
+                }
+                BoxType::CanonCMP1 => {
+                }
+                _ => {
+                    debug!("Unsupported box '{:?}' in CRAW", b.head.name);
+                }
+            }
+            skip_box_remain(&mut b)?;
+        }
+    }
+    skip_box_remain(src)?;
+    check_parser_state!(src.content);
+
+    Ok((codec_type, SampleEntry::CanonCRAW(CanonCRAWEntry {
+        data_reference_index: data_reference_index,
+        width: width,
+        height: height,
+        is_jpeg: is_jpeg,
+    })))
+}
+
 /// Parse an video description inside an stsd box.
-fn read_video_sample_entry<T: Read>(src: &mut BMFFBox<T>) -> Result<(CodecType, SampleEntry)> {
+fn read_video_sample_entry<T: Read>(src: &mut BMFFBox<T>, brand: &FourCC) -> Result<(CodecType, SampleEntry)> {
     let name = src.get_header().name;
     let codec_type = match name {
         BoxType::AVCSampleEntry | BoxType::AVC3SampleEntry => CodecType::H264,
         BoxType::MP4VideoSampleEntry => CodecType::MP4V,
         BoxType::VP8SampleEntry => CodecType::VP8,
         BoxType::VP9SampleEntry => CodecType::VP9,
-        BoxType::CanonCRAWEntry => CodecType::CRAW,
+        BoxType::CanonCRAWEntry => {
+            if brand == &FourCC::from("crx ") {
+                CodecType::CRAW
+            } else {
+                debug!("Unsupported CRAW codec found in '{:?}'.", brand);
+                CodecType::Unknown
+            }
+        }
         BoxType::ProtectedVisualSampleEntry => CodecType::EncryptedVideo,
         _ => {
             debug!("Unsupported video codec, box {:?} found", name);
@@ -1791,14 +1836,7 @@ fn read_video_sample_entry<T: Read>(src: &mut BMFFBox<T>) -> Result<(CodecType, 
     #[cfg(feature = "craw")]
     {
         if codec_type == CodecType::CRAW {
-            skip_box_remain(src)?;
-            check_parser_state!(src.content);
-
-            return Ok((codec_type, SampleEntry::CanonCRAW(CanonCRAWEntry {
-                data_reference_index: data_reference_index,
-                width: width,
-                height: height,
-            })));
+            return read_craw_entry(src, codec_type, width, height, data_reference_index);
         }
     }
 
@@ -2011,7 +2049,7 @@ fn read_audio_sample_entry<T: Read>(src: &mut BMFFBox<T>) -> Result<(CodecType, 
 }
 
 /// Parse a stsd box.
-fn read_stsd<T: Read>(src: &mut BMFFBox<T>, track: &mut Track) -> Result<SampleDescriptionBox> {
+fn read_stsd<T: Read>(src: &mut BMFFBox<T>, track: &mut Track, brand: & FourCC) -> Result<SampleDescriptionBox> {
     let (_, _) = read_fullbox_extra(src)?;
 
     let description_count = be_u32(src)?;
@@ -2022,7 +2060,7 @@ fn read_stsd<T: Read>(src: &mut BMFFBox<T>, track: &mut Track) -> Result<SampleD
         let mut iter = src.box_iter();
         while let Some(mut b) = iter.next_box()? {
             let description = match track.track_type {
-                TrackType::Video => read_video_sample_entry(&mut b),
+                TrackType::Video => read_video_sample_entry(&mut b, brand),
                 TrackType::Audio => read_audio_sample_entry(&mut b),
                 TrackType::Metadata => Err(Error::Unsupported("metadata track")),
                 TrackType::Unknown => Err(Error::Unsupported("unknown track type")),

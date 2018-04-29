@@ -204,6 +204,7 @@ pub struct Mp4parseTrackVideoInfo {
 pub struct Mp4parseTrackRawInfo {
     pub image_width: u16,
     pub image_height: u16,
+    pub is_jpeg: bool,
 }
 
 #[repr(C)]
@@ -629,6 +630,7 @@ pub unsafe extern fn mp4parse_get_track_raw_info(parser: *mut Mp4parseParser, tr
 
     (*info).image_width = raw.width;
     (*info).image_height = raw.height;
+    (*info).is_jpeg = raw.is_jpeg;
 
     Mp4parseStatus::Ok
 
