@@ -280,6 +280,8 @@ pub struct Mp4parseTrackRawInfo {
     pub image_width: u16,
     pub image_height: u16,
     pub is_jpeg: bool,
+    pub offset: u64,
+    pub size: u64,
 }
 
 #[repr(C)]
@@ -948,6 +950,17 @@ pub unsafe extern "C" fn mp4parse_get_track_raw_info(
     (*info).image_width = raw.width;
     (*info).image_height = raw.height;
     (*info).is_jpeg = raw.is_jpeg;
+    // assume there is an offset and samples size is constant
+    (*info).size = if let Some(ref stsz) = track.stsz {
+        stsz.sample_size as u64
+    } else {
+        0
+    };
+    (*info).offset = if let Some(ref stco) = track.stco {
+        stco.offsets[0]
+    } else {
+        0
+    };
 
     Mp4parseStatus::Ok
 }
