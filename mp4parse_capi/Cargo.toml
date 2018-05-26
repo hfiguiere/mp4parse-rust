@@ -38,6 +38,8 @@ env_logger = "0.7.1"
 cbindgen = "0.5.2"
 
 [features]
+default = ["craw"]
+craw = ["mp4parse/craw"]
 # Enable mp4parse_fallible to use fallible memory allocation rather than
 # panicking on OOM.  Note that this is only safe within Gecko where the system
 # allocator has been globally overridden (see BMO 1457359).
