@@ -36,3 +36,4 @@ test-assembler = "0.1.2"
 
 [features]
 fuzz = ["afl", "abort_on_panic"]
+craw = []
